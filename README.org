@@ -1027,3 +1027,85 @@ Both the /(FILL)/ and the /(EMPTY)/ loops have similar logic. We go through ever
 	M=M+1
 
 #+end_src
+
+** Chapter 5: Computer Architecture
+
+*** Introduction and Roadmap
+
+This chapter is the pinnacle of hardware journey. We will take the chips built in chapters 1-3 and integrate them into a general-purpose computer system. In the course of this we will build:
+
+- *Memory:* The data memory of the system with memory-mapped I/O
+- *CPU:* The central processing unit, containing the /ALU/ and two registers
+- *Computer:* The topmost computer chip that can be connected to a screen and keyboard
+
+*** Core Concepts
+
+**** The Stored Program Concept
+
+The versatility of the computer system is achieved thanks to the /stored program concept/. The computer is a fixed hardware platform capable of executing a fixed number of instructions, but these can be combined to create arbitrarily sophisticated programs. Moreover the logic of these instructions is not embedded in the hardware but is temporarily stored in the computer's /memory/. This allows the same hardware to perform radically different functions depending on the instructions.
+
+**** The von Neumann Architecture
+
+The stored program concept is a key element in von Neumann Architecture, which is a practical model that informs the construction of almost all computer platforms today.
+
+The von Neumann architecture is based on a /CPU/ interacting with a /memory/ device, receiving data from some /input/ device and emitting data to some /output/ device. The memory stores not only the data that the computer manipulates but the /instructions/ that tells the computer what to do. A generic von Neumann architecture can be illustrated like this:
+
+#+ATTR_HTML: :align center
+#+ATTR_HTML: :width 300px
+[[./images/von_neumann_architecture.png]]
+
+
+*** Component Specification and Implementation
+
+**** Memory
+
+The memory is a sequence of fixed-size addressable registers each with an address and a value. It serves the purpose of storing both /data/ and /instructions/.
+
+The address space of the Hack /data memory/ is realized by the /memory/ chip. It is basically an aggregate of three chip parts: a /RAM16K/,/screen/ chip, and /keyboard/ chip. The following image gives the full spec:
+
+#+ATTR_HTML: :align center
+#+ATTR_HTML: :width 300px
+[[./images/data_memory_spec.png]]
+
+The main chips that constitute /memory/ can be implemented this way:
+
+#+begin_src nand2tetris
+
+  // Main chips
+  RAM16K(in=in, load=ramLoad, address=address[0..13], out=ramOut);
+  Screen(in=in, load=scrnLoad, address=address[0..12], out=scrnOut);
+  Keyboard(out=keyboardVal);
+
+#+end_src
+
+***** Selection Logic
+
+The /load/ bit should be direct either to the /Ram16k/ or the /Screen/ (Keyboard is read-only) based on the /address/. Since the address spae of the Screen begins at (16384)_{10} or (100000000000000)_2, we can use /address[14]/ with a /Dmux/ to direct the load either to the /Ram16k/ or /Screen/:
+
+#+begin_src nand2tetris
+
+  DMux(in=load, sel=address[14], a=ramLoad, b=scrnLoad);
+
+#+end_src
+
+To select the /output/ we first select between the Keyboard and Screen outputs. The Keyboard address space begins at (24576)_{10} or (110000000000000)_2 so we use a /Mux16/ with /address[13]/ to select between Keyboard and Screen outputs. We then select between the resulting /mappedMemOut/ and /ramOut/ based on /address[14]/
+
+#+begin_src nand2tetris
+
+  Mux16(a=scrnOut , b=kbrOut , sel=address[13] , out=mappedMemOut );
+  Mux16(a=ramOut , b=mappedMemOut , sel=address[14] , out=out );
+
+#+end_src
+
+***** Mistakes and lessons learned
+
+I first had some logic that validates the keyboard address to make sure it responds to only (110000000000000)_2:
+
+#+begin_src nand2tetris
+
+  // Keyboard validation logic
+  Or8Way(in=address[0..7], out=lowerBitsNonZero); Or8Way(in=address[5..12], out=upperBitsNonZero); Or(a=lowerBitsNonZero, b=upperBitsNonZero, out=notKbdAddress); Mux16(a=keyboardVal, b=false, sel=notKbdAddress, out=kbrOut);
+
+#+end_src
+
+But I think that's unnecessary as the Keyboard chip is a single 16-bit Registers and I don't need to handle this explicitly.
