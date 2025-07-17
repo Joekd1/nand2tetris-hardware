@@ -1109,3 +1109,174 @@ I first had some logic that validates the keyboard address to make sure it respo
 #+end_src
 
 But I think that's unnecessary as the Keyboard chip is a single 16-bit Registers and I don't need to handle this explicitly.
+
+**** CPU
+
+The CPU is designed to execute 16-bit instructions according to the /Hack/ machine language specification. It consists of an /ALU/, two registers, and a program counter. The CPU fetches instructions from an instruction memory and read/writes data to a data memory. It has the following API:
+
+#+ATTR_HTML: :align center
+#+ATTR_HTML: :width 300px
+[[./images/cpu_api.png]]
+
+In case of an /A-instruction/ the CPU loads it into the /A register/. In the case of a /C-instruction/:
+
+1. The CPU causes the ALU to perform the computation specified by the instruction
+2. The resulting value is stored in the subset of {A,D,M}
+
+The implementation of the Hack CPU entails building a logic gate architecture capable of executing a given Hack instruction and determining which instruction should be fetched and executed next.
+
+In order to do so, we will use gate logic for decoding the current instruction, an Arithmetic Logic Unit (ALU) for computing the function specified by the instruction, a set of registers for storing the resulting value, as specified by the instruction, and a program counter for keeping track of which instruction should be fetched and executed next. The proposed configuration is shown here:
+
+#+ATTR_HTML: :align center
+#+ATTR_HTML: :width 300px
+[[./images/cpu_config.png]]
+
+
+***** Instruction Decoding
+
+The 16-bit instruction represents either an /A-instruction/ or a /C-instruction/. In the case of an A-instruction the instruction bits are interpreted as a binary value and loaded into the A-register.
+
+Let's start by determining the instruction type and storing the value in the /A Register/:
+
+#+begin_src nand2tetris
+
+  // Decoding the instruction
+   Not(in=instruction[15] , out=isAInstruction );
+
+   // This is not right yet and only handles A instructions
+   ARegister(in=instruction , load=isAInstruction , out=regAout);
+
+#+end_src
+
+***** ALU
+
+In the case of a C-instruction the instruction is treated as a capsule of control bits encoding the /comp/, /dest/ and /jump/ parts. The result of the /comp/ part will be stored in the /ARegister/ when /instruction[5]/ is 1. Let's implement the /ALU/ first so we can use its output in our registers.
+
+The /ALU/ has two inputs: The output of /DRegister/ and, depending on the /a/ bit, either the inM or the output of the /ARegister/. So first we determine the /y/ input and then feed the /comp/ bits to the control bits of the /ALU/:
+
+#+begin_src nand2tetris
+
+  // Determine the y input of the ALU
+  Mux16(a=aOut , b=inM , sel=instruction[12] , out=aluY );
+
+  //ALU
+  ALU(x=dOut, y=aluY ,
+  zx=instruction[11], nx=instruction[10] ,
+  zy=instruction[9], ny=instruction[8] ,
+  f=instruction[7], no=instruction[6] ,
+  out=aluOut, zr=zr, ng=ng);
+
+#+end_src
+
+***** Registers
+
+We now have our /aluOut/ so we can proceed to implement the registers. In the case of the /ARegister/ a /Mux16/ is used to choose between /aluOut/ and /instruction/. /ARegister/ should be loaded if we have an A-Instruction or a C-Instruction with /instruction[5]/ set:
+
+#+begin_src nand2tetris
+
+  //A Register
+  Mux16(a=instruction, b=aluOut, sel=instruction[15], out=aIn);
+  Or(a=instruction[5], b=isAInstruction, out=loadA);
+  ARegister(in=aIn, load=loadA, out=aOut);
+
+#+end_src
+
+The /DRegister/ can be implemented by simply storing the /aluOut/ when we have a C-instruction and the D destination bit is set:
+
+#+begin_src nand2tetris
+
+  //D Register
+  And(a=instruction[15], b=instruction[4], out=loadD);
+  DRegister(in=aluOut, load=loadD, out=dOut);
+
+#+end_src
+
+***** PC
+
+Now that we have the ALU and the registers we proceed to implement the /PC/. As a side effect of executing the current instruction, our CPU determines and emits the address of the instruction that should be executed next. The output of the /PC/ chip is what determines the next instruction. Our program should start at =pc = 0= and by default the CPU should emit =pc++=. This default behavior is changed when we have to effect a /jump/. According to the Hack spec, in the case of a jump, execution branches to the current value of the /ARegister/. All in all, our PC chip needs to realize this logic: If there's no jump: =pc = PC++= else =pc = aOUt=. This can be realized by feeding /aOut/ to the /PC/ and asserting the load bit in the case of a jump.
+
+How to determine if we have a jump? First we need to determine which /jump/ bits are asserted. We have reproduced the table of the /jump/ spec here:
+
+| jump | j1 | j2 | j3 | effect             |
+|------+----+----+----+--------------------|
+| null |  0 |  0 |  0 | No jump            |
+| JGT  |  0 |  0 |  1 | If comp > 0 jump   |
+| JEQ  |  0 |  1 |  0 | If comp = 0 jump   |
+| JGE  |  0 |  1 |  1 | If comp ≥ 0 jump   |
+| JLT  |  1 |  0 |  0 | If comp < 0 jump   |
+| JNE  |  1 |  0 |  1 | If comp ≠ 0 jump   |
+| JLE  |  1 |  1 |  0 | If comp ≤ 0 jump   |
+| JMP  |  1 |  1 |  1 | Unconditional Jump |
+
+We can see that this logic can be implemented using a /DMux8Way/ with =sel = instruction[0..2]=. Note that =instruction[0..2]= is interpreted as a jump only in the case of a C-instruction, so we can simply use /instruction[15]/ as the input to the /DMux8Way/. That way the /DMux8Way/ will always output 0 in the case of an A-Instruction:
+
+#+begin_src nand2tetris
+
+  // Determine which jump bit is asserted
+  DMux8Way(in=instruction[15], sel=instruction[0..2],
+  a=noJMP, b=JGT,
+  c=JEQ, d=JGE,
+  e=JLT, f=JNE,
+  g=JLE, h=JMP);
+
+#+end_src
+
+So what we need now is to use the ALU outputs /zr/ and /ng/, with the outputs of the /DMux8Way/. to determine if a jump condition has been met. This will determine the load of our /PC/ chip:
+
+#+begin_src nand2tetris
+
+  // isJGT if not ng and not zr
+  Not(in=ng, out=notNg);
+  Not(in=zr, out=notZr);
+  And(a=notNg, b=notZr, out=pos);
+  And(a=JGT, b=pos, out=isJGT);
+
+  // isJEG if zr
+  And(a=JEQ, b=zr, out=isJEQ);
+
+  // isJGE if not ng
+  And(a=JGE, b=notNg, out=isJGE);
+
+  // isJLT if ng
+  And(a=JLT, b=ng, out=isJLT);
+
+  // isJNE if not zr
+  And(a=JNE, b=notZr, out=isJNE);
+
+  // isJLE if ng or zr
+  Or(a=zr, b=ng, out=ngOrZr);
+  And(a=JLE, b=ngOrZr, out=isJLE);
+
+  // if a jump condition is met pcLoad = 1, else pcLoad = 0
+  Or8Way(in[0]=isJGT, in[1]=isJEQ,
+  in[2]=isJGE, in[3]=isJLT,
+  in[4]=isJNE, in[5]=isJLE,
+  in[6]=JMP, in[7]=false, out=pcLoad);
+
+  // PC
+  PC(in=aOut, load=pcLoad, inc=true, reset=reset, out[0..14]=pc);
+
+#+end_src
+
+***** Memory outputs
+
+The CPU interfaces with the data memory through /outM/, /addressM/ and /writeM/. If one of destination registers in an M register, then the /outM/ is set to the /ALU/ output and /writeM/ is set to 1. Otherwise /writeM/ is set to 0 and any value may appear in /writeM/.
+
+This can be implemented by first setting /writeM/ to 1 in the case of a C-instruction with an M destination. Then we add /outM/ as an output to the /ALU/ and /addressM/ as an output of the /ARegister/:
+
+#+begin_src nand2tetris
+
+
+  ALU(x=dOut, y=aluY,
+  ....
+  out=aluOut, out=outM,
+  zr=zr, ng=ng);
+
+  //A Register
+  ....
+  ARegister(in=aIn, load=loadA, out=aOut, out[0..14]=addressM);
+
+  // Determine writeM
+  And(a=instruction[3], b=instruction[15], out=writeM);
+
+#+end_src

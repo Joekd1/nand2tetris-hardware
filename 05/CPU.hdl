@@ -1,0 +1,100 @@
+// This file is part of www.nand2tetris.org
+// and the book "The Elements of Computing Systems"
+// by Nisan and Schocken, MIT Press.
+// File name: projects/5/CPU.hdl
+/**
+* The Hack Central Processing unit (CPU).
+* Parses the binary code in the instruction input and executes it according to the
+* Hack machine language specification. In the case of a C-instruction, computes the
+* function specified by the instruction. If the instruction specifies to read a memory
+* value, the inM input is expected to contain this value. If the instruction specifies
+* to write a value to the memory, sets the outM output to this value, sets the addressM
+* output to the target address, and asserts the writeM output (when writeM = 0, any
+* value may appear in outM).
+* If the reset input is 0, computes the address of the next instruction and sets the
+* pc output to that value. If the reset input is 1, sets pc to 0.
+* Note: The outM and writeM outputs are combinational: they are affected by the
+* instruction's execution during the current cycle. The addressM and pc outputs are
+* clocked: although they are affected by the instruction's execution, they commit to
+* their new values only in the next cycle.
+*/
+CHIP CPU {
+	IN  inM[16],         // M value input  (M = contents of RAM[A])
+	instruction[16], // Instruction for execution
+	reset;           // Signals whether to re-start the current
+	// program (reset==1) or continue executing
+	// the current program (reset==0).
+
+	OUT outM[16],        // M value output
+        writeM,          // Write to M?
+        addressM[15],    // Address in data memory (of M)
+        pc[15];          // address of next instruction
+
+	PARTS:
+
+	// Decoding the instruction
+	Not(in=instruction[15], out=isAInstruction);
+
+	// Determine the y input of the ALU
+	Mux16(a=aOut, b=inM, sel=instruction[12], out=aluY);
+
+	//ALU
+	ALU(x=dOut, y=aluY,
+	zx=instruction[11], nx=instruction[10],
+	zy=instruction[9], ny=instruction[8],
+	f=instruction[7], no=instruction[6],
+	out=aluOut, out=outM,
+	zr=zr, ng=ng);
+
+	//A Register
+	Mux16(a=instruction, b=aluOut, sel=instruction[15], out=aIn);
+	Or(a=instruction[5], b=isAInstruction, out=loadA);
+	ARegister(in=aIn, load=loadA, out=aOut, out[0..14]=addressM);
+
+	//D Register
+	And(a=instruction[15], b=instruction[4], out=loadD);
+	DRegister(in=aluOut, load=loadD, out=dOut);
+
+	// ----- Jump logic -----
+
+	// Determine which jump bit is asserted
+	DMux8Way(in=instruction[15], sel=instruction[0..2],
+	a=noJMP, b=JGT,
+	c=JEQ, d=JGE,
+	e=JLT, f=JNE,
+	g=JLE, h=JMP);
+
+	// isJGT if not ng and not zr
+	Not(in=ng, out=notNg);
+	Not(in=zr, out=notZr);
+	And(a=notNg, b=notZr, out=pos);
+	And(a=JGT, b=pos, out=isJGT);
+
+	// isJEG if zr
+	And(a=JEQ, b=zr, out=isJEQ);
+
+	// isJGE if not ng
+	And(a=JGE, b=notNg, out=isJGE);
+
+	// isJLT if ng
+	And(a=JLT, b=ng, out=isJLT);
+
+	// isJNE if not zr
+	And(a=JNE, b=notZr, out=isJNE);
+
+	// isJLE if ng or zr
+	Or(a=zr, b=ng, out=ngOrZr);
+	And(a=JLE, b=ngOrZr, out=isJLE);
+
+	// if a jump condition is met pcLoad = 1, else pcLoad = 0
+	Or8Way(in[0]=isJGT, in[1]=isJEQ,
+	in[2]=isJGE, in[3]=isJLT,
+	in[4]=isJNE, in[5]=isJLE,
+	in[6]=JMP, in[7]=false, out=pcLoad);
+
+	// PC
+	PC(in=aOut, load=pcLoad, inc=true, reset=reset, out[0..14]=pc);
+
+	// Determine writeM
+	And(a=instruction[3], b=instruction[15], out=writeM);
+}
