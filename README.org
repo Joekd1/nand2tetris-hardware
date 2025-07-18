@@ -1280,3 +1280,47 @@ This can be implemented by first setting /writeM/ to 1 in the case of a C-instru
   And(a=instruction[3], b=instruction[15], out=writeM);
 
 #+end_src
+
+**** Computer
+
+/Computer/ is the top-level chip. It can be connected to a screen and a keyboard. It also has a /reset/ input that when set to 0 and then to 1 the computer starts executing the instructions. Here's the interface:
+
+#+ATTR_HTML: :align center
+#+ATTR_HTML: :width 300px
+[[./images/computer_api.png]]
+
+This can be realized using three chip-parts: the /CPU/, the /data memory/ and the instruction memory chip /ROM32K/. The details are shown in the figure below:
+
+#+ATTR_HTML: :align center
+#+ATTR_HTML: :width 300px
+[[./images/computer_impl.png]]
+
+
+This implementation seeks to realize this behavior: when the user asserts the /reset/ input the CPU's /pc/ output emits 0, causing the instruction memory /ROM32K/ to emit the first instruction. The CPU then takes charge and determines which instruction to fetch next, realizing the fetch-execute cycle already implemented.
+
+First we implement the /ROM32K/ which simply takes the /pc/ as its address and emits the /instruction/:
+
+#+begin_src nand2tetris
+
+  // instruction memory
+  ROM32K(address=pc, out=instruction);
+
+#+end_src
+
+This /instruction/ is fed to the /CPU/ which in turns feeds its output to the /data memory/:
+
+#+begin_src nand2tetris
+
+  // CPU
+  CPU(inM=inM,
+  instruction=instruction,
+  reset=reset,
+  outM=outM,
+  writeM=writeM,
+  addressM=addressM,
+  pc=pc);
+
+  // Data memory
+  Memory(in=outM, load=writeM, address=addressM, out=inM);
+
+#+end_src
