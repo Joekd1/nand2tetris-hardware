@@ -1,5 +1,22 @@
 #+title: Nand2Tetris : Building a Modern Computer From First Principles - Part 1 : Hardware
 
+* Table of Contents :TOC:
+- [[#motivation][Motivation]]
+- [[#applied-skills-and-preparation][Applied Skills and Preparation]]
+  - [[#mathematical-foundations][Mathematical Foundations]]
+  - [[#programming-languages--systems][Programming Languages & Systems]]
+- [[#introduction-and-roadmap][Introduction and roadmap]]
+  - [[#the-hello-world-iceberg][The Hello World Iceberg]]
+  - [[#which-computer][Which Computer?]]
+  - [[#roadmap][Roadmap]]
+- [[#project-implementation][Project Implementation]]
+  - [[#chapter-1-boolean-logic][Chapter 1: Boolean Logic]]
+  - [[#chapter-2-boolean-arithmetic][Chapter 2: Boolean Arithmetic]]
+  - [[#chapter-3-memory][Chapter 3: Memory]]
+  - [[#chapter-4-machine-language][Chapter 4: Machine Language]]
+  - [[#chapter-5-computer-architecture][Chapter 5: Computer Architecture]]
+  - [[#chapter-6-assembler][Chapter 6: Assembler]]
+
 * Motivation
 
 I found it satisfying to implement a mini-programming language in Racket as part of the [[https://www.coursera.org/learn/programming-languages-part-b][Programming Languages]] course. This motivated me to seek to understand computing at its most fundamental level. Nand2Tetris offers a practical learning experience that puts together different aspects of Computer Science. It is a hands-on journey from primitive gates to a fully functioning computer capable of running Tetris.
@@ -1324,3 +1341,229 @@ This /instruction/ is fed to the /CPU/ which in turns feeds its output to the /d
   Memory(in=outM, load=writeM, address=addressM, out=inM);
 
 #+end_src
+
+** Chapter 6: Assembler 
+
+*** Structure and planning
+
+- *main.rs:* Instantiates the Assembler, runs it and handles top level errors.
+- *assembler.rs:* Drives the assembly process using the =Parser= and =Code= modules.
+- *Parser.rs:* Reads the input file and offers a convenient way to skip through the comments and blank lines, breaking instructions into their main components.
+- *instruction.rs:* Keeps track of the current instruction and the parsing Regex.
+- *Code.rs:* Translates symbolic Hack mnemonics into their binary codes.
+- *symbol_table.rs:* Keeps track of symbolic references and their values.
+
+*** Assembler.rs
+
+The assembler crate defines the =Assembler= struct with the following fields:
+
+- file_path: Keeps track of the original file path.
+- parser: Contains an instance of the Parser.
+- code: Contains an instance of Code.
+- symbol_table: Holds an instance of the =SymbolTable=.
+- next_address: Holds the value of the next available address for non-builtin variables.
+- binary: A vec containing the results of the assembly process.
+
+It also defines these methods:
+
+**** build
+
+Creating an instance of the =Assembler= involves reading an env variable for the source file, and checking if the file exists.
+This operation can fail for a variety of reasons (For example file not existing or wrong extension), so the method returns a =Result= with a =Box<dyn Error>= variant. The error is propagated and handled in =main.rs= where we exit the program when an Error variant is encountered. There's no reason to continue if we can't successfully create an instance of the Assembler.
+
+**** run
+
+Handles the main logic of the assembly process. We first call =build_symbol_table= to add all the symbolic L instruction to =symbol_table=. Then, after resetting the relevant parser fields, we loop over =advance= and assemble each instruction based on its type. The resulting =binary= is then written to a file.
+
+**** build_symbol_table
+
+Performs the first pass of the assembly process that handles L instructions. Each L instruction symbol is added to the =symbol_table= with the next line number as its value.
+
+**** assemble_a_instruction
+
+Uses the =parser= to extract the =symbol=, which can be either a digit or a variable name. The symbol is then passed to =process_symbol= and the resulting digit is converted to binary and added to the =binary= vector.
+
+**** process_symbol
+
+Responsible for handling possible variables. if the symbol is a digit then we have nothing to do, we just return it. If it's not a digit then it's a variable. If it's the first time we encounter said variable then it's not in the =symbol_table=. We add it and then return its address. If the symbol already exists then we just return its address using =get_address=.
+
+**** convert_number_to_binary
+
+Converts the decimal number to binary and adds the necessary padding to make a 16-bit binary digit.
+
+**** assemble_c_instruction
+
+Uses the =parser= and =code= to extract the computation, destination, and jump symbols, and translate them into their binary value. The resulting binary digit is added to the =binary= struct.
+
+**** write_binary_to_file
+
+Responsible for writing the resulting =binary= vec to a file. We use a =BufWriter= to make the writing process more efficient.
+
+**** get_output_path
+
+Returns a =PathBuf= by changing the extension of the =file_path=. This keeps the original path and changes only the extension.
+
+*** Parser.rs
+
+The assembler crate defines the =Parser= struct with the following fields:
+
+- contents: A vec of Strings that contains the contents of the source file.
+- file_index: Keeps track of our position in the file.
+- current_line: Keeps track of instruction lines. For now it just skips comments and empty lines. 
+- instruction: Holds an instance of the Instruction type, This type will later hold other fields related to instructions.
+ 
+The Parser also defines these methods:
+
+**** build
+
+Returns an instance of the =Parser=. Note that using a functional style with closures is much more efficient.
+We are returning a =Result= for the same reasons the =Assembler= returns a =Result=.
+
+#+begin_src rust
+  
+  let contents: Vec<_> = contents
+      .lines()
+      .map(|s| s.trim().to_string())
+      .collect();
+
+#+end_src
+
+**** has_more_lines
+
+Returns =true= if there are more lines in the file. Initially it should return =false=.
+
+**** advance
+
+If =has_more_lines= is false then we have nothing more to do, we return an Error. Otherwise, we increment our position in the file. If the instruction is valid then we update =instruction.current=. The =current_line= is only incremented in the case of an A or C instruction.
+
+**** instruction_type
+
+Returns the type of the current valid instruction. I opted for using =and_then= on the =current_instruction= option. This makes it much easier than having to check for a Some variant of =current_instruction= for each if statement. Note that we have to use =as_ref()= here to avoid moving the string out of the =Option= and into the Closure.
+
+#+begin_src rust
+
+  pub fn instruction_type(&self) -> Option<InstructionType> {
+      self.instruction.current.as_ref().and_then(|current| {
+  	// The match logic gets here
+      })
+
+#+end_src
+
+I am using the =Regex= crate for using Regex to match an instruction to an instruction type. The Regex also contain capture groups that will be used later to extract specific parts of the instruction.
+
+**** symbol
+
+If the current instruction is an A instruction of the type @xxx or an L instruction (xxx) we return xxx. This is done by using Regex and capture groups.
+
+We first use =and_then= to extract a reference to the current instruction:
+
+#+begin_src rust
+  self.instruction.current.as_ref().and_then(|current_inst| {
+      // The extraction logic goes here
+  }
+  )
+#+end_src
+
+Extracting a capture group is done by calling captures on the regular expression and passing the =current_instruction= to it.
+Since there are different regular expressions depending if it's an A or L instruction, we first extract the regex:
+
+
+#+begin_src rust
+  // ...
+
+   let regex = match self.instruction_type() {
+       Some(InstructionType::AInstruction) => &self.instruction.regex.reg_a,
+       Some(InstructionType::LInstruction) => &self.instruction.regex.reg_l,
+       _ => return None,
+   };
+
+  //..
+
+#+end_src
+
+
+We can then call captures on =regex= and extract the symbol:
+
+#+begin_src rust
+
+  regex
+      .captures(current_inst)
+      .and_then(|caps| caps.get(1))
+      .map(|m| m.as_str())
+
+#+end_src
+
+**** capture_c_instruction_by_name
+
+This is a helper function that encapsulates getting a capture group from a C instruction using its name.
+The logic is similar and only the name changes. We filter the instruction type and based on the result, we extract the capture of the current instruction using the supplied name.
+
+**** dest
+
+Returns the destination part of the C instruction by using the previously defined helper function.
+
+**** comp
+
+Returns the computation part of the C instruction by using the previously defined helper function.
+
+**** jump
+
+Returns the jump part of the C instruction by using the previously defined helper function.
+
+*** Code.rs
+
+This module is responsible for translating symbolic hack mnemonics into their corresponding binary code.
+It implements these methods:
+
+**** new
+
+This is the method responsible for constructing an instance of the =Code= struct with hashmaps linking the default mneonics to their corresponding binary value. We chose three distinct hashmaps due to some overlap between the keys, which give different binary results depending if it's a destination, computation or jump operation.
+
+**** canonicalize_dest
+
+Responsible for canonizing the destination string, so that it gives the same string no matter what order the individual destinations are in. 
+
+**** dest
+
+Returns the binary code of the destination mnemonic.
+
+**** comp
+
+Returns the binary code of the computation mnemonic.
+
+**** jump
+
+Returns the binary code of the jump mnemonic.
+
+*** instruction.rs
+
+Defines the =Instruction= struct and the =InstructionType= enum. =Instruction= holds these fields:
+
+- current: holds the current instruction.
+- regex: contains an instance of =InstructionRegex= for determining the instruction type and extracting the different mnemonics.
+
+=Instrution= implements only a simple constructor method:
+
+**** new
+
+Constructs an instance of the =Instruction= struct.
+
+*** symbol_table.rs
+
+Defines the =SymbolTable= struct that contains a hashmap linking Hack symbols to their value. It defines these methods:
+
+**** new
+
+Constructs a new instance of =SymbolTable= containing the default Hack symbols as per the language spec.
+
+**** add_entry
+
+Takes a symbol and an address and adds them to the =map=.
+
+**** contains
+
+Returns true if the symbol exists in the table.
+
+**** get_address
+
+Returns the address that corresponds to the given symbol.
